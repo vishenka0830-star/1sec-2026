@@ -1,91 +1,83 @@
 import os
 import datetime
 import subprocess
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message
-from aiogram.filters import Command
 import asyncio
-from config import BOT_TOKEN, VIDEOS_DIR, FINAL_DIR
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message, FSInputFile
+from aiogram.filters import Command
 
-bot = Bot(token=BOT_TOKEN)
+token = os.getenv("BOT_TOKEN")
+bot = Bot(token=token)
 dp = Dispatcher()
 
-def user_year_path(user_id: int, year: int):
-    path = os.path.join(VIDEOS_DIR, f"user_{user_id}", str(year))
+def get_user_path(user_id):
+    path = f"videos/{user_id}/{datetime.datetime.now().year}"
     os.makedirs(path, exist_ok=True)
     return path
 
 @dp.message(Command("start"))
 async def start(message: Message):
     await message.answer(
-        "🎥 Привет!\n\n"
-        "Каждый день присылай мне одно видео (1-3 сек)\n"
-        "Я обрежу до 1 секунды и сохраню ❤️\n\n"
-        "В конце года соберу твой фильм!\n\n"
-        "Команды:\n"
-        "/render — собрать видео сейчас\n"
-        "/stats — сколько дней уже есть"
+        "🎥 Привет ❤️\n\n"
+        "Присылай мне каждый день одно видео\n"
+        "Я сохраню ровно 1 секунду\n\n"
+        "/stats — сколько дней уже есть\n"
+        "/render — собрать ролик прямо сейчас"
     )
 
 @dp.message(F.video)
-async def handle_video(message: Message):
+async def video(message: Message):
     user_id = message.from_user.id
-    today = datetime.date.today()
-    year = today.year
-    user_path = user_year_path(user_id, year)
-    filename = f"{today.strftime('%m-%d')}.mp4"
-    file_path = os.path.join(user_path, filename)
+    today = datetime.date.today().strftime("%m-%d")
+    user_path = get_user_path(user_id)
+    file_path = f"{user_path}/{today}.mp4"
 
     if os.path.exists(file_path):
-        await message.answer("⚠️ За сегодня уже есть видео. Можно переснять завтра или использовать /render")
+        await message.answer("⚠️ За сегодня уже есть видео")
         return
 
-    video = message.video
-    temp_path = file_path.replace(".mp4", "_temp.mp4")
-    await bot.download(video.file_id, temp_path)
-
-    # Обрезаем до 1 секунды
+    file = await bot.get_file(message.video.file_id)
+    await bot.download_file(file.file_path, file_path)
+    
     subprocess.run([
-        "ffmpeg", "-y", "-i", temp_path, "-t", "1", "-c:v", "libx264", "-preset", "ultrafast", file_path
+        "ffmpeg", "-y", "-i", file_path, "-t", "1", "-c", "copy", file_path
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    os.remove(temp_path)
-    await message.answer("✅ 1 секунда сохранена!")
+    await message.answer("✅ 1 секунда сохранена за сегодня ❤️")
+
+@dp.message(Command("stats"))
+async def stats(message: Message):
+    user_id = message.from_user.id
+    user_path = get_user_path(user_id)
+    count = len([f for f in os.listdir(user_path) if f.endswith(".mp4")]) if os.path.exists(user_path) else 0
+    await message.answer(f"📊 Снято дней в {datetime.datetime.now().year}: {count}/365 ❤️")
 
 @dp.message(Command("render"))
 async def render(message: Message):
     user_id = message.from_user.id
-    year = datetime.date.today().year
-    user_path = user_year_path(user_id, year)
-
+    user_path = get_user_path(user_id)
     files = sorted([f for f in os.listdir(user_path) if f.endswith(".mp4")])
-    if not files:
-        await message.answer("Нет видео за этот год 😔")
+    
+    if len(files) < 2:
+        await message.answer("Пока мало видео 😔 Нужно хотя бы 2 дня")
         return
 
-    list_file = os.path.join(user_path, "list.txt")
-    with open(list_file, "w", encoding="utf-8") as f:
+    list_file = f"{user_path}/list.txt"
+    with open(list_file, "w") as f:
         for file in files:
-            f.write(f"file '{os.path.join(user_path, file)}'\n")
+            f.write(f"file '{user_path}/{file}'\n")
 
-    os.makedirs(FINAL_DIR, exist_ok=True)
-    output = os.path.join(FINAL_DIR, f"{user_id}_{year}_final.mp4")
+    output = f"final/{user_id}_{datetime.datetime.now().year}.mp4"
+    os.makedirs("final", exist_ok=True)
 
     subprocess.run([
         "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_file, "-c", "copy", output
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    await message.answer_video(open(output, "rb"), caption="🎉 Твой фильм 2025 года готов!")
-
-@dp.message(Command("stats"))
-async def stats(message: Message):
-    user_id = message.from_user.id
-    year = datetime.date.today().year
-    user_path = user_year_path(user_id, year)
-    count = len([f for f in os.listdir(user_path) if f.endswith(".mp4")]) if os.path.exists(user_path) else 0
-    await message.answer(f"Снято дней в {year} году: {count}/365 📅")
+    await message.answer_video(FSInputFile(output), caption="🎬 Твой ролик готов прямо сейчас ❤️")
 
 async def main():
+    print("Бот запущен и работает 24/7 ❤️")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
